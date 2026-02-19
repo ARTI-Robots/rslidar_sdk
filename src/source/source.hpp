@@ -35,6 +35,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "msg/rs_msg/lidar_point_cloud_msg.hpp"
 #include "utility/yaml_reader.hpp"
 #include <rs_driver/msg/packet.hpp>
+#include <sensor_msgs/Image.h>
 
 
 namespace robosense
@@ -51,6 +52,7 @@ public:
   virtual void start() {}
   virtual void stop() {}
   virtual void sendPointCloud(const LidarPointCloudMsg& msg) = 0;
+  virtual void sendDepthImage(const sensor_msgs::Image& img) = 0;
 #ifdef ENABLE_IMU_DATA_PARSE
   virtual void sendImuData(const std::shared_ptr<ImuData>& msg) = 0;
 #endif
@@ -93,6 +95,7 @@ protected:
 
   void sendPacket(const Packet& msg);
   void sendPointCloud(std::shared_ptr<LidarPointCloudMsg> msg);
+  void sendDepthImage(std::shared_ptr<sensor_msgs::Image> msg);
 #ifdef ENABLE_IMU_DATA_PARSE
   void sendImuData(const std::shared_ptr<ImuData>& msg);
 #endif
@@ -129,6 +132,14 @@ inline void Source::sendPointCloud(std::shared_ptr<LidarPointCloudMsg> msg)
   for (auto iter : pc_cb_vec_)
   {
     iter->sendPointCloud(*msg);
+  }
+}
+
+inline void Source::sendDepthImage(std::shared_ptr<sensor_msgs::Image> msg)
+{
+  for (auto iter : pc_cb_vec_)
+  {
+    iter->sendDepthImage(*msg);
   }
 }
 
