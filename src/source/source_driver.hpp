@@ -36,7 +36,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <rs_driver/api/lidar_driver.hpp>
 #include <rs_driver/utility/sync_queue.hpp>
-#include "source/depth_image_builder.hpp"
+#include "source/extended_pc_builder.hpp"
 #include <sensor_msgs/image_encodings.h>
 
 namespace robosense
@@ -65,7 +65,7 @@ protected:
   void processPointCloud();
 
   std::shared_ptr<lidar::LidarDriver<LidarPointCloudMsg>> driver_ptr_;
-  DepthImageParams depth_params_;
+  ExtendedPCParams extended_pc_params_;
   SyncQueue<std::shared_ptr<LidarPointCloudMsg>> free_point_cloud_queue_;
   SyncQueue<std::shared_ptr<LidarPointCloudMsg>> point_cloud_queue_;
 #ifdef ENABLE_IMU_DATA_PARSE
@@ -88,17 +88,17 @@ SourceDriver::SourceDriver(SourceType src_type)
 inline void SourceDriver::init(const YAML::Node& config)
 {
 
-  YAML::Node depth_image_config = yamlSubNodeAbort(config, "depth_image");
-  float depth_w_, depth_h_, depth_min_range_m, depth_max_range_m, yaw_min, yaw_max, pitch_min, pitch_max;
-  yamlRead<float>(depth_image_config, "width", depth_w_, 240);
-  yamlRead<float>(depth_image_config, "height", depth_h_, 320);
-  yamlRead<float>(depth_image_config, "min_range", depth_min_range_m, 0.5);
-  yamlRead<float>(depth_image_config, "max_range", depth_max_range_m, 10);
-  yamlRead<float>(depth_image_config, "yaw_min", yaw_min, -45.0);
-  yamlRead<float>(depth_image_config, "yaw_max", yaw_max, 45.0);
-  yamlRead<float>(depth_image_config, "pitch_min", pitch_min, -60.0);
-  yamlRead<float>(depth_image_config, "pitch_max", pitch_max, 60.0);
-  depth_params_.set(depth_w_, depth_h_, depth_min_range_m, depth_max_range_m, yaw_min, yaw_max, pitch_min, pitch_max);
+  YAML::Node extended_pc_config = yamlSubNodeAbort(config, "extended_point_cloud");
+  float ex_pc_w_, ex_pc_h_, ex_pc_min_range_m, ex_pc_max_range_m, yaw_min, yaw_max, pitch_min, pitch_max;
+  yamlRead<float>(extended_pc_config, "width", ex_pc_w_, 240);
+  yamlRead<float>(extended_pc_config, "height", ex_pc_h_, 320);
+  yamlRead<float>(extended_pc_config, "min_range", ex_pc_min_range_m, 0.5);
+  yamlRead<float>(extended_pc_config, "max_range", ex_pc_max_range_m, 10);
+  yamlRead<float>(extended_pc_config, "yaw_min", yaw_min, -45.0);
+  yamlRead<float>(extended_pc_config, "yaw_max", yaw_max, 45.0);
+  yamlRead<float>(extended_pc_config, "pitch_min", pitch_min, -60.0);
+  yamlRead<float>(extended_pc_config, "pitch_max", pitch_max, 60.0);
+  extended_pc_params_.set(ex_pc_w_, ex_pc_h_, ex_pc_min_range_m, ex_pc_max_range_m, yaw_min, yaw_max, pitch_min, pitch_max);
 
   YAML::Node driver_config = yamlSubNodeAbort(config, "driver");
   lidar::RSDriverParam driver_param;
@@ -266,18 +266,23 @@ void SourceDriver::processImuData()
 #endif
 void SourceDriver::processPointCloud()
 {
-  DepthImageBuilder depth_builder(depth_params_);
+  ExtendedPCBuilder ex_pc_builder(extended_pc_params_);
 
-  std::vector<float> depth_buf(static_cast<size_t>(depth_params_.width) * static_cast<size_t>(depth_params_.height));
+  const int W = extended_pc_params_.width;
+  const int H = extended_pc_params_.height;
+  const size_t N = static_cast<size_t>(W) * static_cast<size_t>(H);
 
-  auto depth_msg = std::make_shared<sensor_msgs::Image>();
-  depth_msg->height = depth_params_.height;
-  depth_msg->width  = depth_params_.width;
-  depth_msg->encoding = sensor_msgs::image_encodings::TYPE_32FC1;
-  depth_msg->is_bigendian = false;
-  depth_msg->step = static_cast<uint32_t>(depth_params_.width * sizeof(float));
-  depth_msg->data.resize(static_cast<size_t>(depth_msg->step) * static_cast<size_t>(depth_params_.height));
+  std::vector<float> depth_buf(N);
+  std::vector<float> x_buf(N), y_buf(N), z_buf(N), intensity_buf(N);
+  const size_t point_step = sizeof(PointXYZDIF);
 
+  auto extended_pc_msg = std::make_shared<sensor_msgs::PointCloud2>();
+  extended_pc_msg->height = extended_pc_params_.height;
+  extended_pc_msg->width  = extended_pc_params_.width;
+  extended_pc_msg->point_step = point_step;
+  extended_pc_msg->row_step   = point_step * extended_pc_params_.width;
+  extended_pc_msg->is_bigendian = false;
+  extended_pc_msg->data.resize(point_step * extended_pc_params_.width * extended_pc_params_.height);
   while (!to_exit_process_)
   {
     std::shared_ptr<LidarPointCloudMsg> msg = point_cloud_queue_.popWait(1000);
@@ -288,15 +293,22 @@ void SourceDriver::processPointCloud()
     sendPointCloud(msg);
     
     std::fill(depth_buf.begin(), depth_buf.end(), std::numeric_limits<float>::infinity());
-    depth_builder.buildAngular(msg->points, depth_buf.data());
-    depth_builder.fillHolesNearest(depth_buf);
+    std::fill(x_buf.begin(), x_buf.end(), std::numeric_limits<float>::quiet_NaN());
+    std::fill(y_buf.begin(), y_buf.end(), std::numeric_limits<float>::quiet_NaN());
+    std::fill(z_buf.begin(), z_buf.end(), std::numeric_limits<float>::quiet_NaN());
+    std::fill(intensity_buf.begin(), intensity_buf.end(), std::numeric_limits<float>::quiet_NaN());
+
+    ex_pc_builder.buildAngular(msg->points, depth_buf.data(), x_buf.data(), y_buf.data(), z_buf.data(), intensity_buf.data());
+    ex_pc_builder.fillHolesNearest(depth_buf, x_buf, y_buf,z_buf, intensity_buf);
 
 
-    std::memcpy(depth_msg->data.data(), depth_buf.data(), depth_msg->data.size());
-    depth_msg->header.seq = msg->seq;
-    depth_msg->header.stamp = depth_msg->header.stamp.fromSec(msg->timestamp);
+    std::memcpy(extended_pc_msg->data.data(), depth_buf.data(), extended_pc_msg->data.size());
+    extended_pc_msg->header.seq = msg->seq;
+    extended_pc_msg->header.stamp = extended_pc_msg->header.stamp.fromSec(msg->timestamp);
 
-    sendDepthImage(depth_msg);
+    ex_pc_builder.fillExtendedPointCloud(*extended_pc_msg, depth_buf, x_buf, y_buf, z_buf, intensity_buf);
+
+    sendExtendedPC(extended_pc_msg);
     free_point_cloud_queue_.push(msg);
   }
 }

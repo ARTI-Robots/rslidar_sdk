@@ -7,7 +7,7 @@
 #include <limits>
 #include <type_traits>
 
-struct DepthImageParams
+struct ExtendedPCParams
 {
   int width  = 0;   // output image width (pixels)
   int height = 0;   // output image height (pixels)
@@ -33,15 +33,15 @@ struct DepthImageParams
   }
 };
 
-class DepthImageBuilder
+class ExtendedPCBuilder
 {
 public:
-  explicit DepthImageBuilder(const DepthImageParams& p) : p_(p) {}
+  explicit ExtendedPCBuilder(const ExtendedPCParams& p) : p_(p) {}
 
-  const DepthImageParams& params() const { return p_; }
+  const ExtendedPCParams& params() const { return p_; }
 
   template <class PointT>
-  void buildAngular(const PointT* pts, std::size_t n_pts, float* depth_out) const
+  void buildAngular(const PointT* pts, std::size_t n_pts, float* depth_out, float* x_out, float* y_out, float* z_out, float* intensity_out) const
   {
     if (!pts || !depth_out) return;
     if (p_.width <= 0 || p_.height <= 0) return;
@@ -94,14 +94,20 @@ public:
 
       // Z-buffer: keep nearest
       const float prev = depth_out[idx];
-      if (!std::isfinite(prev) || r < prev) depth_out[idx] = r;
+      if (!std::isfinite(prev) || r < prev){
+         depth_out[idx] = r;
+         x_out[idx] = x;
+         y_out[idx] = y;
+         z_out[idx] = z;
+         intensity_out[idx] = pts[i].intensity;
+        }
     }
   }
 
   template <class PointCloudLike>
-  void buildAngular(const PointCloudLike& points, float* depth_out) const
+  void buildAngular(const PointCloudLike& points, float* depth_out, float* x_out, float* y_out, float* z_out, float* intensity_out) const
   {
-    buildAngular(points.data(), points.size(), depth_out);
+    buildAngular(points.data(), points.size(), depth_out, x_out, y_out, z_out, intensity_out);
   }
 
 
@@ -110,15 +116,19 @@ public:
     return std::isfinite(d) && d > 0.0f;
   }
 
-  void fillHolesNearest(std::vector<float>& depth)
+  void fillHolesNearest(std::vector<float>& depth , std::vector<float>& x_buf, std::vector<float>& y_buf, std::vector<float>& z_buf, std::vector<float>& intensity_buf)
   {
   int radius = 1;
   int passes = radius;
-  std::vector<float> tmp(depth.size());
+  std::vector<float> tmp(depth.size()), tmpX(depth.size()), tmpY(depth.size()), tmpZ(depth.size()), tmpI(depth.size());
 
   for (int pass = 0; pass < passes; ++pass)
   {
     tmp = depth;
+    tmpX = x_buf;
+    tmpY = y_buf;
+    tmpZ = z_buf;
+    tmpI = intensity_buf;
 
     for (int y = 0; y < p_.height; ++y)
     {
@@ -135,6 +145,7 @@ public:
 
         float best = std::numeric_limits<float>::infinity();
         int bestDist2 = 1e9;
+        size_t best_j = (size_t)-1;
 
         for (int yy = y0; yy <= y1; ++yy)
         {
@@ -153,19 +164,77 @@ public:
             {
               bestDist2 = dist2;
               best = d;
+              best_j = j;
             }
           }
         }
 
-        if (std::isfinite(best))
-          tmp[idx] = best;
+        if (best_j != (size_t)-1)
+        {
+          tmp[idx] = depth[best_j];
+          tmpX[idx] = x_buf[best_j];
+          tmpY[idx] = y_buf[best_j];
+          tmpZ[idx] = z_buf[best_j];
+          tmpI[idx] = intensity_buf[best_j];
+        }
       }
     }
 
     depth.swap(tmp);
+    x_buf.swap(tmpX);
+    y_buf.swap(tmpY);
+    z_buf.swap(tmpZ);
+    intensity_buf.swap(tmpI);
     }
   }
+  static sensor_msgs::PointField makeField(const std::string& name, uint32_t offset)
+  {
+  sensor_msgs::PointField f;
+  f.name = name;
+  f.offset = offset;
+  f.datatype = sensor_msgs::PointField::FLOAT32;
+  f.count = 1;
+  return f;
+  }
+ void fillExtendedPointCloud(sensor_msgs::PointCloud2& msg,
+                            const std::vector<float>& depth,
+                            const std::vector<float>& x,
+                            const std::vector<float>& y,
+                            const std::vector<float>& z,
+                            const std::vector<float>& intensity)
+{
+  const size_t N = static_cast<size_t>(p_.height) * static_cast<size_t>(p_.width);
+
+  msg.height = p_.height;        // organized: preserves (v,u)
+  msg.width  = p_.width;
+  msg.is_bigendian = false;
+  msg.is_dense = false;
+
+  msg.fields.resize(5);
+  msg.fields[0] = makeField("x",         0);
+  msg.fields[1] = makeField("y",         4);
+  msg.fields[2] = makeField("z",         8);
+  msg.fields[3] = makeField("depth",     12);
+  msg.fields[4] = makeField("intensity", 16);
+
+  msg.point_step = sizeof(PointXYZDIF);                 // 20 bytes
+  msg.row_step   = msg.point_step * static_cast<uint32_t>(p_.width);
+  msg.data.resize(N * msg.point_step);
+
+  auto* out = reinterpret_cast<PointXYZDIF*>(msg.data.data());
+
+  for (size_t idx = 0; idx < N; ++idx)
+  {
+    out[idx].x = x[idx];
+    out[idx].y = y[idx];
+    out[idx].z = z[idx];
+    out[idx].depth = depth[idx];
+    out[idx].intensity = intensity[idx];
+  }
+
+}
+
 
 private:
-  DepthImageParams p_;
+  ExtendedPCParams p_;
 };

@@ -204,7 +204,7 @@ public:
   virtual void init(const YAML::Node& config);
   virtual void sendPointCloud(const LidarPointCloudMsg& msg);
   virtual ~DestinationPointCloudRos() = default;
-  virtual void sendDepthImage(const sensor_msgs::Image& /*img*/);
+  virtual void sendExtendedPC(const sensor_msgs::PointCloud2& /*img*/);
 #ifdef ENABLE_IMU_DATA_PARSE
   virtual void sendImuData(const std::shared_ptr<ImuData> & data);
 #endif
@@ -216,7 +216,7 @@ private:
 #endif
   std::string frame_id_;
   bool send_by_rows_;
-  ros::Publisher depth_pub_;
+  ros::Publisher ex_pc_pub_;
 };
 
 inline void DestinationPointCloudRos::init(const YAML::Node& config)
@@ -236,14 +236,14 @@ inline void DestinationPointCloudRos::init(const YAML::Node& config)
   yamlRead<std::string>(config["ros"], 
       "ros_send_point_cloud_topic", ros_send_topic, "rslidar_points");
 
-  std::string ros_send_depth_topic;
+  std::string ros_send_ex_pc_topic;
   yamlRead<std::string>(config["ros"], 
-      "ros_send_depth_image_topic", ros_send_depth_topic, "rslidar_depth");
+      "ros_send_extended_pc_topic", ros_send_ex_pc_topic, "rslidar_extended_pc");
 
 
   nh_ = std::unique_ptr<ros::NodeHandle>(new ros::NodeHandle());
   pub_ = nh_->advertise<sensor_msgs::PointCloud2>(ros_send_topic, 10);
-  depth_pub_ = nh_->advertise<sensor_msgs::Image>(ros_send_depth_topic, 10);
+  ex_pc_pub_ = nh_->advertise<sensor_msgs::PointCloud2>(ros_send_ex_pc_topic, 10);
 
 #ifdef ENABLE_IMU_DATA_PARSE
   std::string ros_send_imu_data_topic;
@@ -258,11 +258,11 @@ inline void DestinationPointCloudRos::sendPointCloud(const LidarPointCloudMsg& m
   pub_.publish(toRosMsg(msg, frame_id_, send_by_rows_));
 }
 
-inline void DestinationPointCloudRos::sendDepthImage(const sensor_msgs::Image& img)
+inline void DestinationPointCloudRos::sendExtendedPC(const sensor_msgs::PointCloud2& img)
 {
-  sensor_msgs::Image out = img;
+  sensor_msgs::PointCloud2 out = img;
   out.header.frame_id = frame_id_;
-  depth_pub_.publish(out);
+  ex_pc_pub_.publish(out);
 }
 #ifdef ENABLE_IMU_DATA_PARSE
 inline void DestinationPointCloudRos::sendImuData(const std::shared_ptr<ImuData> & data)
