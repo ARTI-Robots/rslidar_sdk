@@ -88,7 +88,8 @@ SourceDriver::SourceDriver(SourceType src_type)
 inline void SourceDriver::init(const YAML::Node& config)
 {
 
-  YAML::Node extended_pc_config = yamlSubNodeAbort(config, "extended_point_cloud");
+  YAML::Node extended_pc_config =
+    config["extended_point_cloud"] ? yamlSubNodeAbort(config, "extended_point_cloud") : YAML::Node();
   float ex_pc_w_, ex_pc_h_, ex_pc_min_range_m, ex_pc_max_range_m, yaw_min, yaw_max, pitch_min, pitch_max;
   yamlRead<float>(extended_pc_config, "width", ex_pc_w_, 240);
   yamlRead<float>(extended_pc_config, "height", ex_pc_h_, 320);
